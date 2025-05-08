@@ -1,1 +1,1 @@
-web: . venv/bin/activate && python -m streamlit run main.py --server.port $PORT 
+web: python -m streamlit run main.py --server.port $PORT 
