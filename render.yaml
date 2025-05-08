@@ -2,8 +2,13 @@ services:
   - type: web
     name: controle-faturamento
     env: python
-    buildCommand: pip install -r requirements.txt
-    startCommand: streamlit run main.py --server.port $PORT
+    buildCommand: |
+      python -m venv venv
+      . venv/bin/activate
+      pip install -r requirements.txt
+    startCommand: |
+      . venv/bin/activate
+      streamlit run main.py --server.port $PORT
     envVars:
       - key: PYTHON_VERSION
         value: 3.9.0 
