@@ -179,7 +179,7 @@ st.markdown("""
     }
     /* Ajustes para o conteúdo principal */
     .main-content {
-        margin-bottom: 4rem;
+        padding-bottom: 4rem;
     }
     /* Ajustes para o sidebar em mobile */
     @media (max-width: 768px) {
@@ -204,6 +204,30 @@ st.markdown("""
     #MainMenu {visibility: hidden;}
     header {visibility: hidden;}
     footer {visibility: hidden;}
+    
+    /* Footer personalizado */
+    .footer {
+        position: fixed;
+        bottom: 0;
+        left: 0;
+        right: 0;
+        background-color: #1E88E5;
+        color: white;
+        text-align: center;
+        padding: 0.8rem;
+        font-size: 1rem;
+        z-index: 9999;
+        box-shadow: 0 -2px 10px rgba(0,0,0,0.1);
+    }
+    .footer a {
+        color: white;
+        text-decoration: none;
+        font-weight: bold;
+        margin: 0 5px;
+    }
+    .footer a:hover {
+        text-decoration: underline;
+    }
     </style>
     """, unsafe_allow_html=True)
 
@@ -450,15 +474,19 @@ def corrigir_emails_banco():
 
 # Função principal
 def main():
+    # Footer (movido para o início da função)
+    st.markdown("""
+        <div class="footer">
+            Desenvolvido por <a href="https://github.com/rafael-lima-dev" target="_blank">Francisco Rafael</a> | 
+            <a href="https://github.com/rafael-lima-dev/controle-faturamento" target="_blank">Ver código fonte</a>
+        </div>
+    """, unsafe_allow_html=True)
+
     # Inicializar banco de dados
     init_db()
     
     # Corrigir emails no banco
     corrigir_emails_banco()
-    
-    # Verificar login persistente
-    if st.session_state.get('user_id') and not st.session_state.get('user_nome'):
-        verificar_login_persistente()
     
     # Checar se há token de redefinição na URL
     query_params = st.query_params
