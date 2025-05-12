@@ -9,6 +9,7 @@ from pathlib import Path
 import yagmail
 from dotenv import load_dotenv
 import secrets
+import time
 
 # Configuração da página
 st.set_page_config(
@@ -703,19 +704,35 @@ def main():
     st.markdown('<div class="main-content">', unsafe_allow_html=True)
     if menu_opcao == "Inserir Faturamento":
         st.markdown("<h2 style='display:flex;align-items:center;gap:8px;'><span style='font-size:2rem;'>📝</span> Inserir Novo Faturamento</h2>", unsafe_allow_html=True)
+        if 'valor_faturamento' not in st.session_state:
+            st.session_state.valor_faturamento = 0.0
+        if 'show_success_faturamento' not in st.session_state:
+            st.session_state.show_success_faturamento = False
         with st.form("faturamento_form"):
             col1, col2 = st.columns(2)
             with col1:
                 data = st.date_input("📅 Data", value=datetime.now())
             with col2:
-                valor = st.number_input("💵 Valor (R$)", min_value=0.0, step=0.01)
+                valor = st.number_input("💵 Valor (R$)", min_value=0.0, step=0.01, key="valor_faturamento")
             submit = st.form_submit_button("💾 Salvar Faturamento")
             if submit:
                 if valor > 0:
                     salvar_faturamento(st.session_state.user_id, data, valor)
-                    st.success("Faturamento registrado com sucesso!")
+                    st.session_state.show_success_faturamento = True
+                    # Remover o valor do campo antes do rerun para resetar
+                    if 'valor_faturamento' in st.session_state:
+                        del st.session_state['valor_faturamento']
+                    st.rerun()
                 else:
                     st.warning("Por favor, insira um valor válido!")
+        # Exibir mensagem de sucesso e sumir após 2 segundos
+        if st.session_state.get('show_success_faturamento', False):
+            st.success("Faturamento registrado com sucesso!")
+            # Usar st.empty para sumir a mensagem após 2 segundos
+            msg_placeholder = st.empty()
+            time.sleep(2)
+            st.session_state.show_success_faturamento = False
+            st.rerun()
     elif menu_opcao == "Ver Lucro do Mês":
         st.markdown("<h2 style='display:flex;align-items:center;gap:8px;'><span style='font-size:2rem;'>📅</span> Lucro do Mês</h2>", unsafe_allow_html=True)
         ano = st.selectbox("Ano", range(2020, datetime.now().year + 1), index=datetime.now().year - 2020)
