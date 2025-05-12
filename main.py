@@ -24,20 +24,73 @@ st.markdown("""
     .main {
         padding: 1rem;
     }
+    .main-header {
+        font-size: 2.5rem;
+        font-weight: bold;
+        color: #1E88E5;
+        text-align: center;
+        margin-bottom: 2rem;
+        text-shadow: 2px 2px 4px rgba(0,0,0,0.1);
+    }
+    .sub-header {
+        font-size: 1.8rem;
+        font-weight: bold;
+        color: #1565C0;
+        text-align: center;
+        margin-bottom: 1.5rem;
+        text-shadow: 1px 1px 2px rgba(0,0,0,0.1);
+    }
+    .success-message {
+        color: #2E7D32;
+        font-weight: bold;
+        text-align: center;
+        padding: 1rem;
+        background-color: #E8F5E9;
+        border-radius: 5px;
+        margin: 1rem 0;
+    }
+    .error-message {
+        color: #C62828;
+        font-weight: bold;
+        text-align: center;
+        padding: 1rem;
+        background-color: #FFEBEE;
+        border-radius: 5px;
+        margin: 1rem 0;
+    }
+    .info-message {
+        color: #1565C0;
+        font-weight: bold;
+        text-align: center;
+        padding: 1rem;
+        background-color: #E3F2FD;
+        border-radius: 5px;
+        margin: 1rem 0;
+    }
     .stButton>button {
-        width: 100%;
-        background-color: #4CAF50;
+        background-color: #1E88E5;
         color: white;
-        padding: 0.5rem 1rem;
+        font-weight: bold;
         border: none;
-        border-radius: 4px;
-        font-weight: 500;
+        padding: 0.5rem 1rem;
+        border-radius: 5px;
         transition: all 0.3s ease;
+        width: 100%;
+        font-size: 1.1rem;
     }
     .stButton>button:hover {
-        background-color: #45a049;
+        background-color: #1565C0;
         transform: translateY(-2px);
-        box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+        box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+    }
+    .stTextInput>div>div>input {
+        border: 2px solid #1E88E5;
+        border-radius: 5px;
+        padding: 0.5rem;
+    }
+    .stTextInput>div>div>input:focus {
+        border-color: #1565C0;
+        box-shadow: 0 0 0 2px rgba(30,136,229,0.2);
     }
     .css-1d391kg {
         padding: 1rem;
@@ -64,9 +117,20 @@ st.markdown("""
     }
     .form-container {
         background-color: #f8f9fa;
-        padding: 1rem;
+        padding: 2rem;
         border-radius: 8px;
         margin-bottom: 1rem;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+    }
+    .form-container .stTextInput>div>div>input {
+        border: 2px solid #1E88E5;
+        border-radius: 5px;
+        padding: 0.8rem;
+        font-size: 1rem;
+    }
+    .form-container .stTextInput>div>div>input:focus {
+        border-color: #1565C0;
+        box-shadow: 0 0 0 2px rgba(30,136,229,0.2);
     }
     .link-container {
         text-align: center;
@@ -207,12 +271,16 @@ def listar_usuarios():
 def hash_senha(senha):
     return hashlib.sha256(senha.encode()).hexdigest()
 
+def normalizar_email(email):
+    return email.strip().lower()
+
 def verificar_login(email, senha):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     try:
+        email = normalizar_email(email)
         senha_hash = hash_senha(senha)
-        c.execute('SELECT id, nome, senha FROM usuarios WHERE email = ?', (email,))
+        c.execute('SELECT id, nome, senha FROM usuarios WHERE LOWER(email) = ?', (email,))
         result = c.fetchone()
         if result:
             if result[2] == senha_hash:
@@ -276,7 +344,8 @@ def verificar_email_existe(email):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     try:
-        c.execute('SELECT id FROM usuarios WHERE email = ?', (email,))
+        email = normalizar_email(email)
+        c.execute('SELECT id FROM usuarios WHERE LOWER(email) = ?', (email,))
         return c.fetchone() is not None
     finally:
         conn.close()
@@ -285,13 +354,14 @@ def registrar_usuario(email, senha, nome):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     try:
+        email = normalizar_email(email)
         if verificar_email_existe(email):
             return False, "Este email já está cadastrado!"
         senha_hash = hash_senha(senha)
         c.execute('INSERT INTO usuarios (email, senha, nome) VALUES (?, ?, ?)',
                  (email, senha_hash, nome))
         conn.commit()
-        c.execute('SELECT id, email, senha FROM usuarios WHERE email = ?', (email,))
+        c.execute('SELECT id, email, senha FROM usuarios WHERE LOWER(email) = ?', (email,))
         result = c.fetchone()
         if result:
             return True, "Usuário registrado com sucesso!"
@@ -308,7 +378,7 @@ def listar_emails_cadastrados():
     c.execute('SELECT email FROM usuarios')
     emails = c.fetchall()
     conn.close()
-    return [e[0] for e in emails]
+    return [normalizar_email(e[0]) for e in emails]
 
 def listar_tokens_recuperacao():
     conn = sqlite3.connect(DB_PATH)
@@ -344,10 +414,51 @@ def obter_faturamentos_usuario(usuario_id):
     conn.close()
     return result
 
+def verificar_login_persistente():
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    try:
+        c.execute('SELECT id, nome FROM usuarios WHERE id = ?', (st.session_state.get('user_id'),))
+        result = c.fetchone()
+        if result:
+            st.session_state.user_id = result[0]
+            st.session_state.user_nome = result[1]
+            return True
+        return False
+    finally:
+        conn.close()
+
+# Função para verificar e corrigir emails no banco
+def corrigir_emails_banco():
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    try:
+        # Buscar todos os emails
+        c.execute('SELECT id, email FROM usuarios')
+        usuarios = c.fetchall()
+        
+        # Atualizar cada email para minúsculo
+        for usuario_id, email in usuarios:
+            email_normalizado = normalizar_email(email)
+            if email != email_normalizado:
+                c.execute('UPDATE usuarios SET email = ? WHERE id = ?', 
+                         (email_normalizado, usuario_id))
+        
+        conn.commit()
+    finally:
+        conn.close()
+
 # Função principal
 def main():
     # Inicializar banco de dados
     init_db()
+    
+    # Corrigir emails no banco
+    corrigir_emails_banco()
+    
+    # Verificar login persistente
+    if st.session_state.get('user_id') and not st.session_state.get('user_nome'):
+        verificar_login_persistente()
     
     # Checar se há token de redefinição na URL
     query_params = st.query_params
@@ -436,7 +547,9 @@ def main():
                     st.markdown('<div class="form-container">', unsafe_allow_html=True)
                     email = st.text_input("📧 Email")
                     senha = st.text_input("🔑 Senha", type="password")
-                    submit = st.form_submit_button("Entrar")
+                    col1, col2, col3 = st.columns([1,2,1])
+                    with col2:
+                        submit = st.form_submit_button("Entrar", use_container_width=True)
                     st.markdown('</div>', unsafe_allow_html=True)
                     if submit:
                         if email and senha:
