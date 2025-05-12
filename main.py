@@ -24,21 +24,13 @@ st.markdown("""
     .main {
         padding: 1rem;
     }
-    .main-header {
-        font-size: 2.5rem;
+    .main-header, .title {
+        color: #fff !important;
+        text-shadow: 2px 2px 8px #222, 0 1px 0 #fff;
         font-weight: bold;
-        color: #1E88E5;
-        text-align: center;
-        margin-bottom: 2rem;
-        text-shadow: 2px 2px 4px rgba(0,0,0,0.1);
     }
-    .sub-header {
-        font-size: 1.8rem;
-        font-weight: bold;
-        color: #1565C0;
-        text-align: center;
-        margin-bottom: 1.5rem;
-        text-shadow: 1px 1px 2px rgba(0,0,0,0.1);
+    .sub-header, .subtitle {
+        color: #e0e0e0 !important;
     }
     .success-message {
         color: #2E7D32;
