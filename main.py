@@ -466,11 +466,16 @@ def corrigir_emails_banco():
 
 # Função principal
 def main():
-    # Footer (movido para o início da função)
+    # Footer (profissional, com nome, GitHub, LinkedIn, e-mail e direitos reservados)
     st.markdown("""
-        <div class="footer">
-            Desenvolvido por <a href="https://github.com/rafael-lima-dev" target="_blank">Francisco Rafael</a> | 
-            <a href="https://github.com/rafael-lima-dev/controle-faturamento" target="_blank">Ver código fonte</a>
+        <div style='position: fixed; bottom: 0; left: 0; right: 0; background: #1E88E5; color: #fff; text-align: center; padding: 1rem 0; font-size: 1rem; z-index: 9999; box-shadow: 0 -2px 10px rgba(0,0,0,0.1);'>
+            <p style='margin:0;'>Desenvolvido por <strong>Francisco Rafael</strong></p>
+            <p style='margin:0;'>
+                <a href='https://github.com/rafael-lima-dev' target='_blank' style='color:#fff;font-weight:bold;text-decoration:underline;'>Meu GitHub</a> |
+                <a href='https://linkedin.com/in/rafael-lima-dev' target='_blank' style='color:#fff;font-weight:bold;text-decoration:underline;'>Meu LinkedIn</a> |
+                <a href='mailto:seu-email@gmail.com' style='color:#fff;font-weight:bold;text-decoration:underline;'>Contato</a>
+            </p>
+            <p style='margin:0;font-size:0.95em;'>© 2025 - Todos os direitos reservados</p>
         </div>
     """, unsafe_allow_html=True)
 
