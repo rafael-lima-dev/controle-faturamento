@@ -10,6 +10,10 @@ import yagmail
 from dotenv import load_dotenv
 import secrets
 import time
+from database import init_db, verificar_usuario, criar_usuario, salvar_faturamento, get_faturamentos, DATABASE_URL, get_db_connection
+
+# Inicializar o banco de dados
+init_db()
 
 # Configuração da página
 st.set_page_config(
@@ -231,57 +235,24 @@ load_dotenv()
 EMAIL_REMETENTE = os.getenv('EMAIL_REMETENTE')
 EMAIL_SENHA_APP = os.getenv('EMAIL_SENHA_APP')
 
+def adapt_date(val):
+    return val.isoformat()
 
-
-def init_db():
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    
-    # Criar tabela de usuários
-    c.execute('''
-        CREATE TABLE IF NOT EXISTS usuarios (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            email TEXT UNIQUE NOT NULL,
-            senha TEXT NOT NULL,
-            nome TEXT,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    ''')
-    
-    # Criar tabela de faturamentos
-    c.execute('''
-        CREATE TABLE IF NOT EXISTS faturamentos (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            usuario_id INTEGER,
-            data DATE NOT NULL,
-            valor REAL NOT NULL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (usuario_id) REFERENCES usuarios (id)
-        )
-    ''')
-    
-    # Criar tabela de tokens de recuperação de senha
-    c.execute('''
-        CREATE TABLE IF NOT EXISTS recovery_tokens (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER NOT NULL,
-            token TEXT NOT NULL,
-            expires_at TIMESTAMP NOT NULL,
-            used INTEGER DEFAULT 0,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (user_id) REFERENCES usuarios (id)
-        )
-    ''')
-    
-    conn.commit()
-    conn.close()
+def convert_date(val):
+    return datetime.fromisoformat(val.decode())
 
 def listar_usuarios():
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_db_connection()
     c = conn.cursor()
     try:
-        c.execute('SELECT id, email, nome FROM usuarios')
+        if DATABASE_URL:
+            c.execute('SELECT id, email, nome FROM usuarios')
+        else:
+            c.execute('SELECT id, email, nome FROM usuarios')
         return c.fetchall()
+    except Exception as e:
+        print(f"Erro em listar_usuarios: {e}") # Debug
+        return []
     finally:
         conn.close()
 
@@ -292,24 +263,33 @@ def normalizar_email(email):
     return email.strip().lower()
 
 def verificar_login(email, senha):
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_db_connection()
     c = conn.cursor()
     try:
         email = normalizar_email(email)
         senha_hash = hash_senha(senha)
-        c.execute('SELECT id, nome, senha FROM usuarios WHERE LOWER(email) = ?', (email,))
+        if DATABASE_URL:
+            c.execute('SELECT id, nome, senha FROM usuarios WHERE LOWER(email) = %s', (email,))
+        else:
+            c.execute('SELECT id, nome, senha FROM usuarios WHERE LOWER(email) = ?', (email,))
         result = c.fetchone()
         if result:
-            if result[2] == senha_hash:
-                return (result[0], result[1])  # Retorna id e nome
+            user_id = result[0]
+            user_nome = result[1]
+            senha_hash_db = result[2]
+            
+            if senha_hash_db == senha_hash:
+                return {
+                    'id': user_id,
+                    'nome': user_nome,
+                    'email': email
+                }
             else:
-                st.error("Senha incorreta!")
                 return None
         else:
-            st.error("Email não encontrado!")
             return None
     except Exception as e:
-        st.error(f"Erro ao verificar login: {str(e)}")
+        print(f"Erro em verificar_login: {e}")
         return None
     finally:
         conn.close()
@@ -318,57 +298,117 @@ def verificar_login(email, senha):
 def formatar_valor(valor):
     return f"R$ {valor:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
 
-def salvar_faturamento(usuario_id, data, valor):
-    conn = sqlite3.connect(DB_PATH)
+def salvar_faturamento(usuario_id, data, valor, descricao):
+    conn = get_db_connection()
     c = conn.cursor()
-    c.execute('INSERT INTO faturamentos (usuario_id, data, valor) VALUES (?, ?, ?)',
-             (usuario_id, data, valor))
-    conn.commit()
-    conn.close()
+    try:
+        if DATABASE_URL:
+            # PostgreSQL
+            c.execute('INSERT INTO faturamentos (usuario_id, data, valor, descricao) VALUES (%s, %s, %s, %s)',
+                     (usuario_id, data, valor, descricao))
+        else:
+            # SQLite
+            print(f"Salvando faturamento: usuario_id={usuario_id}, data={data}, valor={valor}, descricao={descricao}")
+            c.execute('INSERT INTO faturamentos (usuario_id, data, valor, descricao) VALUES (?, ?, ?, ?)',
+                     (usuario_id, data, valor, descricao))
+        conn.commit()
+        
+        # Verificar se foi salvo
+        c.execute('SELECT * FROM faturamentos WHERE usuario_id = ? ORDER BY id DESC LIMIT 1', (usuario_id,))
+        ultimo = c.fetchone()
+        print(f"Último faturamento salvo: {ultimo}")
+    finally:
+        conn.close()
 
 def obter_faturamentos_mes(usuario_id, ano, mes):
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_db_connection()
     c = conn.cursor()
-    c.execute('''
-        SELECT strftime('%d', data) as dia, valor 
-        FROM faturamentos 
-        WHERE usuario_id = ? 
-        AND strftime('%Y', data) = ? 
-        AND strftime('%m', data) = ?
-        ORDER BY data
-    ''', (usuario_id, str(ano), str(mes).zfill(2)))
-    result = c.fetchall()
-    conn.close()
-    return {dia: valor for dia, valor in result}
+    try:
+        if DATABASE_URL:
+            # PostgreSQL
+            c.execute('''
+                SELECT EXTRACT(DAY FROM data)::text as dia, valor, descricao 
+                FROM faturamentos 
+                WHERE usuario_id = %s 
+                AND EXTRACT(YEAR FROM data) = %s 
+                AND EXTRACT(MONTH FROM data) = %s
+                ORDER BY data
+            ''', (usuario_id, ano, mes))
+        else:
+            # SQLite
+            # Garantir que ano e mes sejam strings e formatados corretamente para comparação
+            ano_str = str(ano)
+            mes_str = str(mes).zfill(2) # Mês formatado com zero à esquerda (ex: '05')
+            print(f"[DEBUG - obter_faturamentos_mes] SQLite Query - usuario_id: {usuario_id}, Ano: {ano_str}, Mes: {mes_str}") # Debug
+            c.execute('''
+                SELECT strftime('%d', data) as dia, valor, descricao 
+                FROM faturamentos 
+                WHERE usuario_id = ? 
+                AND strftime('%Y', data) = ? 
+                AND strftime('%m', data) = ?
+                ORDER BY data
+            ''', (usuario_id, ano_str, mes_str))
+        result = c.fetchall()
+        print(f"[DEBUG - obter_faturamentos_mes] Resultado da consulta: {result}") # Debug
+        # Retornar lista de dicionários com dia, valor e descricao
+        faturamentos_dia = [{'dia': str(r[0]), 'valor': r[1], 'descricao': r[2]} for r in result]
+        print(f"[DEBUG - obter_faturamentos_mes] Lista de dicionários formatada: {faturamentos_dia}") # Debug
+        return faturamentos_dia
+    finally:
+        conn.close()
 
 def obter_faturamentos_ano(usuario_id, ano):
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_db_connection()
     c = conn.cursor()
-    c.execute('''
-        SELECT strftime('%m', data) as mes, SUM(valor) as total
-        FROM faturamentos 
-        WHERE usuario_id = ? 
-        AND strftime('%Y', data) = ?
-        GROUP BY strftime('%m', data)
-        ORDER BY mes
-    ''', (usuario_id, str(ano)))
-    result = c.fetchall()
-    conn.close()
-    return {mes: total for mes, total in result}
+    try:
+        if DATABASE_URL:
+            # PostgreSQL
+            c.execute('''
+                SELECT EXTRACT(MONTH FROM data)::text as mes, SUM(valor) as total
+                FROM faturamentos 
+                WHERE usuario_id = %s 
+                AND EXTRACT(YEAR FROM data) = %s
+                GROUP BY EXTRACT(MONTH FROM data)
+                ORDER BY mes
+            ''', (usuario_id, ano))
+        else:
+            # SQLite
+            # Garantir que ano seja string formatado corretamente para comparação
+            ano_str = str(ano)
+            print(f"[DEBUG - obter_faturamentos_ano] SQLite Query - usuario_id: {usuario_id}, Ano: {ano_str}") # Debug
+            c.execute('''
+                SELECT strftime('%m', data) as mes, SUM(valor) as total
+                FROM faturamentos 
+                WHERE usuario_id = ? 
+                AND strftime('%Y', data) = ?
+                GROUP BY strftime('%m', data)
+                ORDER BY mes
+            ''', (usuario_id, ano_str))
+        result = c.fetchall()
+        print(f"[DEBUG - obter_faturamentos_ano] Resultado da consulta: {result}") # Debug
+        # Retornar lista de dicionários com mes e total
+        faturamentos_ano = [{'mes': str(r[0]), 'total': r[1]} for r in result]
+        print(f"[DEBUG - obter_faturamentos_ano] Lista de dicionários formatada: {faturamentos_ano}") # Debug
+        return faturamentos_ano
+    finally:
+        conn.close()
 
 # Funções de registro (migradas do 1_Registro.py)
 def verificar_email_existe(email):
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_db_connection()
     c = conn.cursor()
     try:
         email = normalizar_email(email)
         c.execute('SELECT id FROM usuarios WHERE LOWER(email) = ?', (email,))
         return c.fetchone() is not None
+    except Exception as e:
+        print(f"Erro em verificar_email_existe: {e}") # Debug
+        return False
     finally:
         conn.close()
 
 def registrar_usuario(email, senha, nome):
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_db_connection()
     c = conn.cursor()
     try:
         email = normalizar_email(email)
@@ -378,58 +418,88 @@ def registrar_usuario(email, senha, nome):
         c.execute('INSERT INTO usuarios (email, senha, nome) VALUES (?, ?, ?)',
                  (email, senha_hash, nome))
         conn.commit()
-        c.execute('SELECT id, email, senha FROM usuarios WHERE LOWER(email) = ?', (email,))
-        result = c.fetchone()
-        if result:
-            return True, "Usuário registrado com sucesso!"
-        else:
-            return False, "Erro ao registrar usuário!"
+        return True, "Usuário registrado com sucesso!"
     except Exception as e:
+        conn.rollback()
+        print(f"Erro em registrar_usuario: {e}") # Debug
         return False, f"Erro ao registrar usuário: {str(e)}"
     finally:
         conn.close()
 
 def listar_emails_cadastrados():
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute('SELECT email FROM usuarios')
-    emails = c.fetchall()
-    conn.close()
-    return [normalizar_email(e[0]) for e in emails]
-
-def listar_tokens_recuperacao():
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute('SELECT token, user_id, expires_at, used FROM recovery_tokens')
-    tokens = c.fetchall()
-    conn.close()
-    return tokens
-
-def excluir_faturamento(faturamento_id):
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_db_connection()
     c = conn.cursor()
     try:
-        c.execute('DELETE FROM faturamentos WHERE id = ?', (faturamento_id,))
+        if DATABASE_URL:
+            c.execute('SELECT email FROM usuarios')
+        else:
+            c.execute('SELECT email FROM usuarios')
+        emails = c.fetchall()
+        return [normalizar_email(e[0]) for e in emails]
+    except Exception as e:
+        print(f"Erro em listar_emails_cadastrados: {e}") # Debug
+        return []
+    finally:
+        conn.close()
+
+def listar_tokens_recuperacao():
+    conn = get_db_connection()
+    c = conn.cursor()
+    try:
+        if DATABASE_URL:
+            c.execute('SELECT token, user_id, expires_at, used FROM recovery_tokens')
+        else:
+            c.execute('SELECT token, user_id, expires_at, used FROM recovery_tokens')
+        tokens = c.fetchall()
+        return tokens
+    except Exception as e:
+        print(f"Erro em listar_tokens_recuperacao: {e}") # Debug
+        return []
+    finally:
+        conn.close()
+
+def excluir_faturamento(faturamento_id):
+    conn = get_db_connection()
+    c = conn.cursor()
+    try:
+        if DATABASE_URL:
+             c.execute('DELETE FROM faturamentos WHERE id = %s', (faturamento_id,))
+        else:
+            c.execute('DELETE FROM faturamentos WHERE id = ?', (faturamento_id,))
         conn.commit()
         return True
     except Exception as e:
+        conn.rollback()
         st.error(f"Erro ao excluir faturamento: {str(e)}")
+        print(f"Erro em excluir_faturamento: {e}") # Debug
         return False
     finally:
         conn.close()
 
 def obter_faturamentos_usuario(usuario_id):
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_db_connection()
     c = conn.cursor()
-    c.execute('''
-        SELECT id, data, valor 
-        FROM faturamentos 
-        WHERE usuario_id = ? 
-        ORDER BY data DESC
-    ''', (usuario_id,))
-    result = c.fetchall()
-    conn.close()
-    return result
+    try:
+        if DATABASE_URL:
+            # PostgreSQL
+            c.execute('''
+                SELECT id, data, valor, descricao 
+                FROM faturamentos 
+                WHERE usuario_id = %s 
+                ORDER BY data DESC
+            ''', (usuario_id,))
+        else:
+            # SQLite
+            c.execute('''
+                SELECT id, data, valor, descricao 
+                FROM faturamentos 
+                WHERE usuario_id = ? 
+                ORDER BY data DESC
+            ''', (usuario_id,))
+        result = c.fetchall()
+        return result
+    finally:
+        conn.close()
 
 def verificar_login_persistente():
     conn = sqlite3.connect(DB_PATH)
@@ -447,7 +517,7 @@ def verificar_login_persistente():
 
 # Função para verificar e corrigir emails no banco
 def corrigir_emails_banco():
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_db_connection()
     c = conn.cursor()
     try:
         # Buscar todos os emails
@@ -480,11 +550,8 @@ def main():
         </div>
     """, unsafe_allow_html=True)
 
-    # Inicializar banco de dados
-    init_db()
-    
-    # Corrigir emails no banco
-    corrigir_emails_banco()
+    # Corrigir emails no banco (Temporariamente removido para debug)
+    # corrigir_emails_banco()
     
     # Checar se há token de redefinição na URL
     query_params = st.query_params
@@ -578,15 +645,15 @@ def main():
                         submit = st.form_submit_button("Entrar", use_container_width=True)
                     st.markdown('</div>', unsafe_allow_html=True)
                     if submit:
-                        if email and senha:
-                            result = verificar_login(email, senha)
-                            if result:
-                                st.session_state.user_id = result[0]
-                                st.session_state.user_nome = result[1]
-                                st.success("Login realizado com sucesso!")
-                                st.rerun()
+                        usuario = verificar_login(email, senha)
+                        if usuario:
+                            st.session_state.logged_in = True
+                            st.session_state.user_id = usuario['id']
+                            st.session_state.user_email = usuario['email']
+                            st.session_state.user_name = usuario['nome']
+                            st.rerun()
                         else:
-                            st.warning("Por favor, preencha todos os campos!")
+                            st.error("Email ou senha incorretos!")
                 st.markdown('<div class="link-container">', unsafe_allow_html=True)
                 if st.button("Não tem uma conta? Clique aqui para se registrar"):
                     st.session_state.show_register = True
@@ -714,12 +781,12 @@ def main():
                 data = st.date_input("📅 Data", value=datetime.now())
             with col2:
                 valor = st.number_input("💵 Valor (R$)", min_value=0.0, step=0.01, key="valor_faturamento")
+            descricao = st.text_area("📝 Descrição", placeholder="Ex: Troca de tela, Conector J8, etc.")
             submit = st.form_submit_button("💾 Salvar Faturamento")
             if submit:
                 if valor > 0:
-                    salvar_faturamento(st.session_state.user_id, data, valor)
+                    salvar_faturamento(st.session_state.user_id, data, valor, descricao)
                     st.session_state.show_success_faturamento = True
-                    # Remover o valor do campo antes do rerun para resetar
                     if 'valor_faturamento' in st.session_state:
                         del st.session_state['valor_faturamento']
                     st.rerun()
@@ -739,60 +806,83 @@ def main():
         mes = st.selectbox("Mês", range(1, 13), index=datetime.now().month - 1)
         faturamentos_dia = obter_faturamentos_mes(st.session_state.user_id, ano, mes)
         if faturamentos_dia:
-            df_dia = pd.DataFrame(list(faturamentos_dia.items()), columns=['Dia', 'Valor'])
-            df_dia['Dia'] = df_dia['Dia'].astype(int)
-            df_dia = df_dia.sort_values('Dia')
+            # Usar nomes de colunas que correspondem às chaves no dicionário (minúsculo)
+            df_dia = pd.DataFrame(faturamentos_dia)
+            print(f"[DEBUG - Ver Lucro do Mês] DataFrame criado: {df_dia}") # Debug
             
-            # Calcular total do mês
-            total_mes = df_dia['Valor'].sum()
+            # Garantir que a coluna Dia seja string antes de converter para int
+            # Usar o nome da coluna em minúsculo
+            df_dia['dia'] = df_dia['dia'].astype(str).str.strip()
+            # Remover linhas onde Dia não é um número válido
+            # Usar o nome da coluna em minúsculo
+            df_dia = df_dia[df_dia['dia'].str.isdigit()]
             
-            # Encontrar o melhor dia
-            melhor_dia = df_dia.loc[df_dia['Valor'].idxmax()]
+            # Agora podemos converter para int com segurança
+            # Usar o nome da coluna em minúsculo
+            df_dia['dia'] = df_dia['dia'].astype(int)
+            # Ordenar pela coluna do dia em minúsculo
+            df_dia = df_dia.sort_values('dia')
             
-            # Converter o dia para uma data completa e obter o nome da semana
-            data_completa = datetime(ano, mes, int(melhor_dia['Dia']))
-            nome_semana = data_completa.strftime('%A')  # Retorna o nome do dia da semana em inglês
-            
-            # Dicionário para traduzir os dias da semana
-            dias_semana = {
-                'Monday': 'Segunda-feira',
-                'Tuesday': 'Terça-feira',
-                'Wednesday': 'Quarta-feira',
-                'Thursday': 'Quinta-feira',
-                'Friday': 'Sexta-feira',
-                'Saturday': 'Sábado',
-                'Sunday': 'Domingo'
-            }
-            
-            # Mostrar resumo em cards
-            col1, col2 = st.columns(2)
-            with col1:
-                st.markdown(f"""
-                    <div style='background-color: #2c3e50; padding: 1.5rem; border-radius: 8px; margin: 1rem 0;'>
-                        <h3 style='margin: 0; color: #ffffff;'>💰 Total do Mês</h3>
-                        <p style='margin: 0.5rem 0; font-size: 1.5rem; color: #4CAF50; font-weight: bold;'>
-                            {formatar_valor(total_mes)}
-                        </p>
-                    </div>
-                """, unsafe_allow_html=True)
-            
-            with col2:
-                st.markdown(f"""
-                    <div style='background-color: #2c3e50; padding: 1.5rem; border-radius: 8px; margin: 1rem 0;'>
-                        <h3 style='margin: 0; color: #ffffff;'>🏆 Melhor Dia</h3>
-                        <p style='margin: 0.5rem 0; font-size: 1.5rem; color: #4CAF50; font-weight: bold;'>
-                            {int(melhor_dia['Dia'])} ({dias_semana[nome_semana]})
-                        </p>
-                        <p style='margin: 0.5rem 0; font-size: 1.5rem; color: #4CAF50; font-weight: bold;'>
-                            {formatar_valor(melhor_dia['Valor'])}
-                        </p>
-                    </div>
-                """, unsafe_allow_html=True)
-            
-            # Mostrar tabela com todos os dias
-            st.markdown("### 📊 Detalhamento por Dia")
-            df_dia['Valor'] = df_dia['Valor'].apply(formatar_valor)
-            st.dataframe(df_dia, hide_index=True)
+            # Verificar se ainda temos dados após a filtragem por dia válido
+            if not df_dia.empty:
+                # Calcular total do mês
+                # Usar o nome da coluna em minúsculo
+                total_mes = df_dia['valor'].sum()
+                
+                # Encontrar o melhor dia (só se houver dados)> 0, já verificado pela condição if not df_dia.empty
+                # Usar o nome da coluna em minúsculo
+                melhor_dia = df_dia.loc[df_dia['valor'].idxmax()]
+                
+                # Converter o dia para uma data completa e obter o nome da semana
+                # Usar o nome da coluna em minúsculo
+                data_completa = datetime(ano, mes, int(melhor_dia['dia']))
+                nome_semana = data_completa.strftime('%A')  # Retorna o nome do dia da semana em inglês
+                
+                # Dicionário para traduzir os dias da semana
+                dias_semana = {
+                    'Monday': 'Segunda-feira',
+                    'Tuesday': 'Terça-feira',
+                    'Wednesday': 'Quarta-feira',
+                    'Thursday': 'Quinta-feira',
+                    'Friday': 'Sexta-feira',
+                    'Saturday': 'Sábado',
+                    'Sunday': 'Domingo'
+                }
+                
+                # Mostrar resumo em cards
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.markdown(f"""
+                        <div style='background-color: #2c3e50; padding: 1.5rem; border-radius: 8px; margin: 1rem 0;'>
+                            <h3 style='margin: 0; color: #ffffff;'>💰 Total do Mês</h3>
+                            <p style='margin: 0.5rem 0; font-size: 1.5rem; color: #4CAF50; font-weight: bold;'>
+                                {formatar_valor(total_mes)}
+                            </p>
+                        </div>
+                    """, unsafe_allow_html=True)
+                
+                with col2:
+                    st.markdown(f"""
+                        <div style='background-color: #2c3e50; padding: 1.5rem; border-radius: 8px; margin: 1rem 0;'>
+                            <h3 style='margin: 0; color: #ffffff;'>🏆 Melhor Dia</h3>
+                            <p style='margin: 0.5rem 0; font-size: 1.5rem; color: #4CAF50; font-weight: bold;'>
+                                {int(melhor_dia['dia'])} ({dias_semana[nome_semana]})
+                            </p>
+                            <p style='margin: 0.5rem 0; font-size: 1.5rem; color: #4CAF50; font-weight: bold;'>
+                                {formatar_valor(melhor_dia['valor'])}
+                            </p>
+                        </div>
+                    """, unsafe_allow_html=True)
+                
+                # Mostrar tabela com todos os dias
+                st.markdown("### 📊 Detalhamento por Dia")
+                # Renomear colunas para exibição
+                df_dia_display = df_dia.rename(columns={'dia': 'Dia', 'valor': 'Valor', 'descricao': 'Descrição'})
+                df_dia_display['Valor'] = df_dia_display['Valor'].apply(formatar_valor)
+                # Exibir Dia, Valor e Descrição (usando o DataFrame renomeado)
+                st.dataframe(df_dia_display[['Dia', 'Valor', 'Descrição']], hide_index=True)
+            else:
+                st.info("Nenhum faturamento com dia válido registrado para o período selecionado após filtragem.")
         else:
             st.info("Nenhum faturamento registrado para o período selecionado.")
     elif menu_opcao == "Ver Lucro do Ano":
@@ -800,42 +890,68 @@ def main():
         ano = st.selectbox("Ano", range(2020, datetime.now().year + 1), index=datetime.now().year - 2020)
         faturamentos_ano = obter_faturamentos_ano(st.session_state.user_id, ano)
         if faturamentos_ano:
-            df_ano = pd.DataFrame(list(faturamentos_ano.items()), columns=['Mês', 'Total'])
-            df_ano['Mês'] = pd.to_datetime(df_ano['Mês'], format='%m').dt.strftime('%B')
-            df_ano = df_ano.sort_values('Mês')
+            # Usar nomes de colunas que correspondem às chaves no dicionário (minúsculo)
+            df_ano = pd.DataFrame(faturamentos_ano)
+            print(f"[DEBUG - Ver Lucro do Ano] DataFrame criado: {df_ano}") # Debug
+
+            # Garantir que a coluna Mês seja string antes de converter
+            # Usar o nome da coluna em minúsculo
+            df_ano['mes'] = df_ano['mes'].astype(str).str.strip()
+            # Remover linhas onde Mês não é um número válido
+            # Usar o nome da coluna em minúsculo
+            df_ano = df_ano[df_ano['mes'].str.isdigit()]
             
-            # Calcular total do ano
-            total_ano = df_ano['Total'].sum()
-            
-            # Encontrar o melhor mês
-            melhor_mes = df_ano.loc[df_ano['Total'].idxmax()]
-            
-            # Mostrar resumo em cards
-            col1, col2 = st.columns(2)
-            with col1:
-                st.markdown(f"""
-                    <div style='background-color: #2c3e50; padding: 1.5rem; border-radius: 8px; margin: 1rem 0;'>
-                        <h3 style='margin: 0; color: #ffffff;'>💰 Total do Ano</h3>
-                        <p style='margin: 0.5rem 0; font-size: 1.5rem; color: #4CAF50; font-weight: bold;'>
-                            {formatar_valor(total_ano)}
-                        </p>
-                    </div>
-                """, unsafe_allow_html=True)
-            
-            with col2:
-                st.markdown(f"""
-                    <div style='background-color: #2c3e50; padding: 1.5rem; border-radius: 8px; margin: 1rem 0;'>
-                        <h3 style='margin: 0; color: #ffffff;'>🏆 Melhor Mês</h3>
-                        <p style='margin: 0.5rem 0; font-size: 1.5rem; color: #4CAF50; font-weight: bold;'>
-                            {melhor_mes['Mês']}: {formatar_valor(melhor_mes['Total'])}
-                        </p>
-                    </div>
-                """, unsafe_allow_html=True)
-            
-            # Mostrar tabela com todos os meses
-            st.markdown("### 📊 Detalhamento por Mês")
-            df_ano['Total'] = df_ano['Total'].apply(formatar_valor)
-            st.dataframe(df_ano, hide_index=True)
+            if not df_ano.empty:
+                # Converter mês para nome do mês
+                # Usar o nome da coluna em minúsculo
+                df_ano['mes'] = pd.to_datetime(df_ano['mes'], format='%m').dt.strftime('%B')
+                # A ordenação alfabética do nome do mês pode não ser a ideal, mas pandas.dt.strftime('%B') retorna nomes em inglês por padrão
+                # Para ordenar corretamente, precisaríamos de um mapeamento numérico ou uma coluna de ordenação
+                # df_ano = df_ano.sort_values('Mês') # Desabilitado pois ordena por nome do mês em inglês
+
+                # Calcular total do ano
+                # Usar o nome da coluna em minúsculo
+                total_ano = df_ano['total'].sum()
+                
+                # Verificar se há valores maiores que zero para encontrar o melhor mês
+                # Usar o nome da coluna em minúsculo
+                if (df_ano['total'] > 0).any():
+                    # Encontrar o melhor mês
+                    # Usar o nome da coluna em minúsculo
+                    melhor_mes = df_ano.loc[df_ano['total'].idxmax()]
+                    
+                    # Mostrar resumo em cards
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        st.markdown(f"""
+                            <div style='background-color: #2c3e50; padding: 1.5rem; border-radius: 8px; margin: 1rem 0;'>
+                                <h3 style='margin: 0; color: #ffffff;'>💰 Total do Ano</h3>
+                                <p style='margin: 0.5rem 0; font-size: 1.5rem; color: #4CAF50; font-weight: bold;'>
+                                    {formatar_valor(total_ano)}
+                                </p>
+                            </div>
+                        """, unsafe_allow_html=True)
+                    
+                    with col2:
+                        st.markdown(f"""
+                            <div style='background-color: #2c3e50; padding: 1.5rem; border-radius: 8px; margin: 1rem 0;'>
+                                <h3 style='margin: 0; color: #ffffff;'>🏆 Melhor Mês</h3>
+                            <p style='margin: 0.5rem 0; font-size: 1.5rem; color: #4CAF50; font-weight: bold;'>
+                                {melhor_mes['mes']}: {formatar_valor(melhor_mes['total'])}
+                                </p>
+                            </div>
+                        """, unsafe_allow_html=True)
+                    
+                    # Mostrar tabela com todos os meses
+                    st.markdown("### 📊 Detalhamento por Mês")
+                    # Renomear colunas para exibição
+                    df_ano_display = df_ano.rename(columns={'mes': 'Mês', 'total': 'Total'})
+                    df_ano_display['Total'] = df_ano_display['Total'].apply(formatar_valor)
+                    st.dataframe(df_ano_display, hide_index=True)
+                else:
+                     st.info("Nenhum faturamento com valor maior que zero registrado para o ano selecionado.")
+            else:
+                st.info("Nenhum faturamento válido registrado para o ano selecionado.")
         else:
             st.info("Nenhum faturamento registrado para o ano selecionado.")
     elif menu_opcao == "Gerenciar Faturamentos":
@@ -846,18 +962,20 @@ def main():
         
         if faturamentos:
             # Criar DataFrame com os faturamentos
-            df = pd.DataFrame(faturamentos, columns=['ID', 'Data', 'Valor'])
+            df = pd.DataFrame(faturamentos, columns=['ID', 'Data', 'Valor', 'Descrição'])
             df['Data'] = pd.to_datetime(df['Data']).dt.strftime('%d/%m/%Y')
             df['Valor'] = df['Valor'].apply(formatar_valor)
             
             # Mostrar tabela com botões de exclusão
             for _, row in df.iterrows():
-                col1, col2, col3, col4 = st.columns([3, 2, 2, 1])
+                col1, col2, col3, col4, col5 = st.columns([2, 2, 3, 2, 1])
                 with col1:
                     st.write(f"📅 {row['Data']}")
                 with col2:
                     st.write(f"💰 {row['Valor']}")
                 with col3:
+                    st.write(f"📝 {row['Descrição']}")
+                with col4:
                     if st.button("🗑️ Excluir", key=f"excluir_{row['ID']}"):
                         if excluir_faturamento(row['ID']):
                             st.success("Faturamento excluído com sucesso!")
