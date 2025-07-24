@@ -442,22 +442,6 @@ def listar_emails_cadastrados():
     finally:
         conn.close()
 
-def listar_tokens_recuperacao():
-    conn = get_db_connection()
-    c = conn.cursor()
-    try:
-        if DATABASE_URL:
-            c.execute('SELECT token, user_id, expires_at, used FROM recovery_tokens')
-        else:
-            c.execute('SELECT token, user_id, expires_at, used FROM recovery_tokens')
-        tokens = c.fetchall()
-        return tokens
-    except Exception as e:
-        print(f"Erro em listar_tokens_recuperacao: {e}") # Debug
-        return []
-    finally:
-        conn.close()
-
 def excluir_faturamento(faturamento_id):
     conn = get_db_connection()
     c = conn.cursor()
